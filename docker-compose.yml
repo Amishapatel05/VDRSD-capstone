@@ -1,4 +1,5 @@
-# P3: 3-node static-membership cluster. NBD ungated until P4 (tests don't use NBD).
+# P4: 3-node quorum cluster. NBD is leader-gated (followers RST; see connect.sh).
+# Mgmt on host 15052-15054, NBD on 10809-10811.
 # Image builds with -DVDR_WITH_NURAFT=ON via RAFT build-arg (needs network for FetchContent).
 # Stdlib-only build still available: docker build -f Dockerfile.vdrd --build-arg RAFT=OFF .
 services:
@@ -12,6 +13,7 @@ services:
     ports:
       - "10809:10809"
       - "50051:50051"
+      - "15052:50052"
     volumes:
       - ./vol0:/data
     command: ["--id", "1", "--data-dir", "/data", "--serve", "--blocks", "65536",
@@ -26,6 +28,7 @@ services:
     ports:
       - "10810:10809"
       - "50052:50051"
+      - "15053:50052"
     volumes:
       - ./vol1:/data
     command: ["--id", "2", "--data-dir", "/data", "--serve", "--blocks", "65536",
@@ -40,6 +43,7 @@ services:
     ports:
       - "10811:10809"
       - "50053:50051"
+      - "15054:50052"
     volumes:
       - ./vol2:/data
     command: ["--id", "3", "--data-dir", "/data", "--serve", "--blocks", "65536",

@@ -8,6 +8,8 @@
 #include "block_store.h"
 #include "nbd_server.h"
 #ifdef VDR_WITH_NURAFT
+#include <thread>
+#include "mgmt_http.h"
 #include "vdr_raft.h"
 #endif
 
@@ -161,9 +163,27 @@ int main(int argc, char** argv) {
     bool skipped = false;
     if (!vdr::SelfTest(raft, &store, cfg.selftest, &skipped)) return 1;
   }
+  NbdServer srv(&store, cfg.nbd_port);
+  srv.SetQuorum([&] { return raft.IsLeader(); },
+                [&](uint64_t b, const char* d) {
+                  std::string e;
+                  return raft.Append(b, d, &e);
+                });
+  MgmtServer mgmt(cfg.mgmt_port, [&] { return raft.LeaderEndpoint(); },
+                  [&] { return "ok leader=" + std::to_string(raft.Leader()); },
+                  [&] {
+                    return "vdr_is_leader " + std::to_string(raft.IsLeader() ? 1 : 0) +
+                           "\nvdr_leader_id " + std::to_string(raft.Leader()) + "\nvdr_commit_index " +
+                           std::to_string(raft.CommitIndex()) + "\n";
+                  });
+  std::thread([&] {
+    std::string e;
+    if (!mgmt.Run(&e)) std::cerr << "mgmt: " << e << "\n";
+  }).detach();
+#else
+  NbdServer srv(&store, cfg.nbd_port);
 #endif
   std::cout << "[vdrd] serving " << cfg.blocks << " blocks on :" << cfg.nbd_port << "\n";
-  NbdServer srv(&store, cfg.nbd_port);
   if (!srv.Run(&err)) {
     std::cerr << "nbd: " << err << "\n";
     return 1;

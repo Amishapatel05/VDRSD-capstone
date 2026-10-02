@@ -49,6 +49,17 @@ class VdrRaft {
 
   bool IsLeader() const { return server_ && server_->is_leader(); }
   int Leader() const { return server_ ? server_->get_leader() : -1; }
+  int Id() const { return id_; }
+
+  nuraft::ulong CommitIndex() const { return sm_ ? sm_->last_commit_index() : 0; }
+
+  std::string LeaderEndpoint() const {
+    const int l = Leader();
+    if (l < 0) return "none";
+    for (const auto& p : peers_)
+      if (p.first == l) return p.second;
+    return "none";
+  }
 
   // Blocking quorum append. False when not leader / not committed.
   bool Append(uint64_t blk, const char data[BlockStore::kBlock], std::string* err) {

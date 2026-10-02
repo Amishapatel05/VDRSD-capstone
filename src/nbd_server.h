@@ -21,6 +21,15 @@ class NbdServer {
  public:
   NbdServer(BlockStore* store, int port) : store_(store), port_(port) {}
 
+  // P4: quorum path. When set, followers RST at connect, every request
+  // re-checks leadership (stepdown-safe), and writes commit via append().
+  // Unset = P2 direct-to-store (keeps nbd_demo unchanged).
+  void SetQuorum(std::function<bool()> is_leader,
+                 std::function<bool(uint64_t, const char*)> append) {
+    is_leader_ = std::move(is_leader);
+    append_ = std::move(append);
+  }
+
   // Blocks: accept loop. Returns only on fatal socket error.
   bool Run(std::string* err) {
     int srv = ::socket(AF_INET, SOCK_STREAM, 0);
@@ -145,7 +154,38 @@ class NbdServer {
     return store_->Fsync(&err);  // ponytail: fsync per write; group-commit when bench says so.
   }
 
+  bool WriteBlocks(uint64_t off, uint32_t len, const char* data) {
+    return quorum() ? QuorumWrite(off, len, data) : WriteRange(off, len, data);
+  }
+
+  // One Raft log per 4K block; commit applies+fsyncs on every node (incl. leader),
+  // so no local write or fsync here. RMW reads hit leader's committed state.
+  // ponytail: Append blocks until commit (quorum loss hangs the NBD op;
+  // client timeout surfaces EIO). Timed-append only if that ever bites.
+  bool QuorumWrite(uint64_t off, uint32_t len, const char* data) {
+    const uint64_t n = store_->num_blocks() * BlockStore::kBlock;
+    if (len == 0 || len > kMaxPayload || off + len > n || off + len < off) return false;
+    char blk[BlockStore::kBlock];
+    std::string err;
+    std::size_t done = 0;
+    while (done < len) {
+      const uint64_t pos = off + done;
+      const uint64_t b = pos / BlockStore::kBlock;
+      const std::size_t bis = static_cast<std::size_t>(pos % BlockStore::kBlock);
+      const std::size_t cp = std::min<std::size_t>(BlockStore::kBlock - bis, len - done);
+      if (cp != BlockStore::kBlock && !store_->Read(b, blk, &err)) return false;
+      std::memcpy(blk + bis, data + done, cp);
+      if (!append_(b, blk)) return false;
+      done += cp;
+    }
+    return true;
+  }
+
   void Session(int fd) {
+    if (quorum() && !is_leader_()) {
+      ::close(fd);  // no follower forwarding: connector re-points nbd-client at leader.
+      return;
+    }
     // Oldstyle handshake: passwd + magic + size + flags + 124 pad.
     char h[8 + 8 + 8 + 4 + 124] = {};
     char* p = h;
@@ -176,6 +216,7 @@ class NbdServer {
       length = be32toh(length);
       (void)flags;
       if (magic != kReqMagic) break;
+      if (quorum() && !is_leader_()) break;  // stepped down mid-connection: drop, don't serve stale.
       if (type == 2) break;  // DISC
       if (type == 3) {       // FLUSH
         std::string err;
@@ -205,7 +246,7 @@ class NbdServer {
         }
         std::string payload(length, '\0');
         if (!RecvAll(fd, payload.data(), length)) break;
-        if (!WriteRange(offset, length, payload.data())) {
+        if (!WriteBlocks(offset, length, payload.data())) {
           if (!Reply(fd, handle, kEio, nullptr, 0)) break;
         } else if (!Reply(fd, handle, 0, nullptr, 0)) {
           break;
@@ -224,4 +265,7 @@ class NbdServer {
 
   BlockStore* store_;
   int port_;
+  std::function<bool()> is_leader_;
+  std::function<bool(uint64_t, const char*)> append_;
+  bool quorum() const { return static_cast<bool>(is_leader_); }
 };
