@@ -2,23 +2,42 @@
 #include <cstdint>
 #include <iostream>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "block_store.h"
 #include "nbd_server.h"
+#ifdef VDR_WITH_NURAFT
+#include "vdr_raft.h"
+#endif
 
 namespace {
 
 struct Config {
   int id = 1;
-  std::string peers = "127.0.0.1:50051";
+  std::string peers = "1@127.0.0.1:50051";  // id@host:port,... (static membership, no add_srv)
   std::string data_dir = "/data";
   int nbd_port = 10809;
   int raft_port = 50051;
   int mgmt_port = 50052;
   uint64_t blocks = 1048576;  // 4 GiB sparse; costs nothing until written.
+  int selftest = 0;           // N>0: leader appends N blocks at startup, keeps serving.
   bool serve = false;
 };
+
+bool ParsePeers(const std::string& s, std::vector<std::pair<int, std::string>>* out) {
+  size_t pos = 0;
+  while (pos < s.size()) {
+    const size_t comma = s.find(',', pos);
+    const std::string tok = s.substr(pos, comma == std::string::npos ? comma : comma - pos);
+    const size_t at = tok.find('@');
+    if (at == std::string::npos) return false;
+    out->push_back({std::stoi(tok.substr(0, at)), tok.substr(at + 1)});
+    if (comma == std::string::npos) break;
+    pos = comma + 1;
+  }
+  return !out->empty();
+}
 
 void print_help(const char* prog) {
   std::cout << "Usage: " << prog << " [options]\n"
@@ -31,6 +50,7 @@ void print_help(const char* prog) {
             << "  --raft-port P   nuRaft transport port (default 50051, P3+)\n"
             << "  --mgmt-port P   mgmt HTTP port (default 50052, P4+)\n"
             << "  --blocks N      export size in 4K blocks (default 1048576 = 4GiB sparse)\n"
+            << "  --selftest N    leader appends N test blocks at startup, keeps serving (needs raft)\n"
             << "  --serve         run NBD server (P2 single-node; quorum-gated from P4)\n"
             << "  -h, --help      show this help\n";
 }
@@ -64,6 +84,16 @@ bool parse_args(int argc, char** argv, Config& cfg) {
       if (a == "--mgmt-port") cfg.mgmt_port = n;
     } else if (a == "--serve") {
       cfg.serve = true;
+    } else if (a == "--selftest") {
+      if (i + 1 >= args.size()) {
+        std::cerr << a << " requires a value\n";
+        return false;
+      }
+      cfg.selftest = std::stoi(args[++i]);
+#ifndef VDR_WITH_NURAFT
+      std::cerr << "--selftest needs -DVDR_WITH_NURAFT=ON build\n";
+      return false;
+#endif
     } else if (a == "--blocks") {
       if (i + 1 >= args.size()) {
         std::cerr << a << " requires a value\n";
@@ -102,7 +132,11 @@ int main(int argc, char** argv) {
   if (!cfg.serve) {
     std::cout << "[vdrd] id=" << cfg.id << " peers=" << cfg.peers << " data-dir=" << cfg.data_dir
               << " nbd=" << cfg.nbd_port << " raft=" << cfg.raft_port << " mgmt=" << cfg.mgmt_port
-              << "\n[vdrd] pass --serve to export NBD (RaftNode lands in P3).\n";
+              << "\n[vdrd] pass --serve to export NBD"
+#ifndef VDR_WITH_NURAFT
+              << " (stdlib-only build: no replication; rebuild with -DVDR_WITH_NURAFT=ON)"
+#endif
+              << ".\n";
     return 0;
   }
   BlockStore store;
@@ -111,6 +145,23 @@ int main(int argc, char** argv) {
     std::cerr << "open store: " << err << "\n";
     return 1;
   }
+#ifdef VDR_WITH_NURAFT
+  std::vector<std::pair<int, std::string>> peers;
+  if (!ParsePeers(cfg.peers, &peers)) {
+    std::cerr << "bad --peers (want id@host:port,...): " << cfg.peers << "\n";
+    return 1;
+  }
+  vdr::VdrRaft raft(cfg.id, peers, cfg.data_dir);
+  if (!raft.Start(&store, &err)) {
+    std::cerr << "raft: " << err << "\n";
+    return 1;
+  }
+  std::cout << "[vdrd] raft up id=" << cfg.id << " leader=" << raft.Leader() << "\n";
+  if (cfg.selftest > 0) {
+    bool skipped = false;
+    if (!vdr::SelfTest(raft, &store, cfg.selftest, &skipped)) return 1;
+  }
+#endif
   std::cout << "[vdrd] serving " << cfg.blocks << " blocks on :" << cfg.nbd_port << "\n";
   NbdServer srv(&store, cfg.nbd_port);
   if (!srv.Run(&err)) {

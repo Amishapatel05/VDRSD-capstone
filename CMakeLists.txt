@@ -23,13 +23,16 @@ target_link_libraries(nbd_demo PRIVATE pthread)
 if(VDR_WITH_NURAFT)
   find_package(OpenSSL REQUIRED)
   find_package(ZLIB REQUIRED)
+  find_package(Threads REQUIRED)
   include(FetchContent)
   FetchContent_Declare(
     nuraft
     GIT_REPOSITORY https://github.com/eBay/NuRaft.git
     GIT_TAG master
-    GIT_SUBMODULES ""
+    GIT_SUBMODULES asio
   )
   FetchContent_MakeAvailable(nuraft)
-  target_link_libraries(vdrd PRIVATE nuraft OpenSSL::SSL OpenSSL::Crypto ZLIB::ZLIB)
+  target_compile_definitions(vdrd PRIVATE VDR_WITH_NURAFT)
+  target_include_directories(vdrd PRIVATE ${nuraft_SOURCE_DIR}/include)
+  target_link_libraries(vdrd PRIVATE nuraft OpenSSL::SSL OpenSSL::Crypto ZLIB::ZLIB Threads::Threads)
 endif()
