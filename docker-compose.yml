@@ -1,4 +1,4 @@
-# P0: single node. P3+ expands to vdrd-0,1,2 (see DEVELOPMENT.md).
+# P2: single node serving NBD. P3+ expands to vdrd-0,1,2 (see DEVELOPMENT.md).
 services:
   vdrd:
     build:
@@ -10,4 +10,4 @@ services:
       - "50052:50052"
     volumes:
       - ./vol0:/data
-    command: ["--id", "1", "--data-dir", "/data"]
+    command: ["--id", "1", "--data-dir", "/data", "--serve", "--blocks", "65536"]

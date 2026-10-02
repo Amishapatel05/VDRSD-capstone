@@ -1,8 +1,11 @@
-// P0 skeleton: arg parse + stub init. No Raft/NBD logic yet (see IMPLEMENTATION_PLAN.md).
-// BlockStore (P1), NbdServer (P2), RaftNode (P3) land as separate files; main stays thin.
+// P2: --serve runs BlockStore + NbdServer single-node (no Raft until P3).
+#include <cstdint>
 #include <iostream>
 #include <string>
 #include <vector>
+
+#include "block_store.h"
+#include "nbd_server.h"
 
 namespace {
 
@@ -13,6 +16,8 @@ struct Config {
   int nbd_port = 10809;
   int raft_port = 50051;
   int mgmt_port = 50052;
+  uint64_t blocks = 1048576;  // 4 GiB sparse; costs nothing until written.
+  bool serve = false;
 };
 
 void print_help(const char* prog) {
@@ -25,6 +30,8 @@ void print_help(const char* prog) {
             << "  --nbd-port P    NBD port (default 10809)\n"
             << "  --raft-port P   nuRaft transport port (default 50051, P3+)\n"
             << "  --mgmt-port P   mgmt HTTP port (default 50052, P4+)\n"
+            << "  --blocks N      export size in 4K blocks (default 1048576 = 4GiB sparse)\n"
+            << "  --serve         run NBD server (P2 single-node; quorum-gated from P4)\n"
             << "  -h, --help      show this help\n";
 }
 
@@ -55,6 +62,14 @@ bool parse_args(int argc, char** argv, Config& cfg) {
       if (a == "--nbd-port") cfg.nbd_port = n;
       if (a == "--raft-port") cfg.raft_port = n;
       if (a == "--mgmt-port") cfg.mgmt_port = n;
+    } else if (a == "--serve") {
+      cfg.serve = true;
+    } else if (a == "--blocks") {
+      if (i + 1 >= args.size()) {
+        std::cerr << a << " requires a value\n";
+        return false;
+      }
+      cfg.blocks = static_cast<uint64_t>(std::stoull(args[++i]));
     } else if (need_val("--peers", v)) {
       if (v.empty()) return false;
       cfg.peers = v;
@@ -84,8 +99,23 @@ int main(int argc, char** argv) {
   Config cfg;
   if (!parse_args(argc, argv, cfg)) return 1;
 
-  std::cout << "[vdrd P0] id=" << cfg.id << " peers=" << cfg.peers << " data-dir=" << cfg.data_dir
-            << " nbd=" << cfg.nbd_port << " raft=" << cfg.raft_port << " mgmt=" << cfg.mgmt_port
-            << "\n[vdrd P0] BlockStore/NbdServer/RaftNode not wired yet (P1-P3).\n";
+  if (!cfg.serve) {
+    std::cout << "[vdrd] id=" << cfg.id << " peers=" << cfg.peers << " data-dir=" << cfg.data_dir
+              << " nbd=" << cfg.nbd_port << " raft=" << cfg.raft_port << " mgmt=" << cfg.mgmt_port
+              << "\n[vdrd] pass --serve to export NBD (RaftNode lands in P3).\n";
+    return 0;
+  }
+  BlockStore store;
+  std::string err;
+  if (!store.Open(cfg.data_dir + "/data.blk", cfg.blocks, &err)) {
+    std::cerr << "open store: " << err << "\n";
+    return 1;
+  }
+  std::cout << "[vdrd] serving " << cfg.blocks << " blocks on :" << cfg.nbd_port << "\n";
+  NbdServer srv(&store, cfg.nbd_port);
+  if (!srv.Run(&err)) {
+    std::cerr << "nbd: " << err << "\n";
+    return 1;
+  }
   return 0;
 }

@@ -16,6 +16,10 @@ target_include_directories(vdrd PRIVATE src)
 add_executable(block_store_demo src/block_store_demo.cpp)
 target_include_directories(block_store_demo PRIVATE src)
 
+add_executable(nbd_demo src/nbd_demo.cpp)
+target_include_directories(nbd_demo PRIVATE src)
+target_link_libraries(nbd_demo PRIVATE pthread)
+
 if(VDR_WITH_NURAFT)
   find_package(OpenSSL REQUIRED)
   find_package(ZLIB REQUIRED)
