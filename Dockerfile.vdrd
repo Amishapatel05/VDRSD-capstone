@@ -2,7 +2,7 @@
 FROM ubuntu:24.04 AS builder
 ARG RAFT=OFF
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential cmake git libssl-dev zlib1g-dev \
+    build-essential cmake git ca-certificates libssl-dev zlib1g-dev \
  && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
 COPY CMakeLists.txt ./
