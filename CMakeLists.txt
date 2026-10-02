@@ -5,19 +5,20 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-add_compile_options(-Wall -Wextra)
-
 # P0: stdlib-only. nuRaft arrives in P3 behind this option so P0 builds offline.
 option(VDR_WITH_NURAFT "Fetch and link nuRaft (P3+)" OFF)
 
 add_executable(vdrd src/main.cpp)
 target_include_directories(vdrd PRIVATE src)
+target_compile_options(vdrd PRIVATE -Wall -Wextra)
 
 add_executable(block_store_demo src/block_store_demo.cpp)
 target_include_directories(block_store_demo PRIVATE src)
+target_compile_options(block_store_demo PRIVATE -Wall -Wextra)
 
 add_executable(nbd_demo src/nbd_demo.cpp)
 target_include_directories(nbd_demo PRIVATE src)
+target_compile_options(nbd_demo PRIVATE -Wall -Wextra)
 target_link_libraries(nbd_demo PRIVATE pthread)
 
 include(CTest)
