@@ -29,9 +29,9 @@ class VdrRaft {
     mgr_ = nuraft::cs_new<VdrStateMgr>(id_, peers_, ls_, dir_);
     nuraft::asio_service::options asio_opt;
     nuraft::raft_params params;
-    params.election_timeout_lower_bound_ms_ = 150;
-    params.election_timeout_upper_bound_ms_ = 300;
-    params.heart_beat_interval_ms_ = 50;
+    params.election_timeout_lower_bound_ = 150;
+    params.election_timeout_upper_bound_ = 300;
+    params.heart_beat_interval_ = 50;
     params.snapshot_distance_ = 100000;  // snapshots off (chk false); logs grow instead.
     server_ = launcher_.init(sm_, mgr_, nuraft::ptr<nuraft::logger>(), Port(), asio_opt, params);
     if (!server_) {

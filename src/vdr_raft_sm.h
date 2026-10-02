@@ -85,7 +85,8 @@ class VdrStateMachine : public nuraft::state_machine {
       snapshot_ = nuraft::snapshot::deserialize(*b);
     }
     nuraft::ptr<std::exception> e(nullptr);
-    when_done(true, e);
+    bool ok = true;
+    when_done(ok, e);  // handler takes (bool&, ...) — no rvalue literal.
   }
 
   bool chk_create_snapshot() override { return false; }
