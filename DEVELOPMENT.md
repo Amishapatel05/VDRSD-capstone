@@ -5,8 +5,31 @@
 
 ## 1. Prereqs
 
-* Docker 24+, `docker compose` plugin, Linux with `nbd` module (`modprobe nbd`), `curl`.
-* For native build: `g++, cmake>=3.28`; for `-DVDR_WITH_NURAFT=ON`: `libssl-dev, libz-dev`, network (FetchContent).
+Ubuntu:
+
+```bash
+sudo apt-get update && sudo apt-get install -y \
+  build-essential cmake git libssl-dev zlib1g-dev \
+  docker.io docker-compose-plugin nbd-client curl fio
+sudo systemctl enable --now docker
+sudo modprobe nbd   # required: /dev/nbd* must exist for P4/P5 tests
+```
+
+Fedora:
+
+```bash
+sudo dnf install -y gcc-c++ cmake git openssl-devel zlib-devel \
+  moby-engine docker-compose nbd curl fio
+sudo systemctl enable --now docker
+docker compose version   # if this fails, install Docker CE from docs.docker.com
+sudo modprobe nbd   # required: /dev/nbd* must exist for P4/P5 tests
+```
+
+SELinux (Fedora, enforcing): bind-mounted `./vol0-2` need relabeling or writes get denied:
+
+```bash
+mkdir -p vol0 vol1 vol2 && chcon -Rt svirt_sandbox_file_t vol0 vol1 vol2
+```
 
 ## 2. Layout
 
