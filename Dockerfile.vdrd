@@ -1,0 +1,18 @@
+# P0 multi-stage: builder + slim runtime. nuRaft deps installed but unused until VDR_WITH_NURAFT=ON (P3).
+FROM ubuntu:24.04 AS builder
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential cmake libssl-dev zlib1g-dev \
+ && rm -rf /var/lib/apt/lists/*
+WORKDIR /src
+COPY CMakeLists.txt ./
+COPY src/ ./src/
+RUN cmake -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo && cmake --build build -j
+
+FROM ubuntu:24.04
+RUN apt-get update && apt-get install -y --no-install-recommends libstdc++6 \
+ && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+COPY --from=builder /src/build/vdrd ./vdrd
+VOLUME /data
+EXPOSE 10809 50051 50052 9090
+ENTRYPOINT ["./vdrd"]

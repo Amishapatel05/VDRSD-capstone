@@ -1,0 +1,6 @@
+build/
+vol0/
+vol1/
+vol2/
+*.o
+compile_commands.json

@@ -1,0 +1,13 @@
+# P0: single node. P3+ expands to vdrd-0,1,2 (see DEVELOPMENT.md).
+services:
+  vdrd:
+    build:
+      context: .
+      dockerfile: Dockerfile.vdrd
+    ports:
+      - "10809:10809"
+      - "50051:50051"
+      - "50052:50052"
+    volumes:
+      - ./vol0:/data
+    command: ["--id", "1", "--data-dir", "/data"]

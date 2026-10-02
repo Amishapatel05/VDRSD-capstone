@@ -1,0 +1,5 @@
+FROM alpine:3.20
+RUN apk add --no-cache nbd curl
+COPY tools/connect.sh /usr/local/bin/connect.sh
+RUN chmod +x /usr/local/bin/connect.sh
+ENTRYPOINT ["/usr/local/bin/connect.sh"]
