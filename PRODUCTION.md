@@ -14,6 +14,7 @@
 * `StatefulSet vdrd x3`, `PVC 10Gi` each (`local-path`), `PodAntiAffinity` spread nodes.
 * Headless `vdrd-headless:50051 (raft), :50052 (mgmt)` for peer DNS `vdrd-{0,1,2}.vdrd-headless`.
 * `DaemonSet vdr-connector` on app nodes: `privileged:true, CAP_SYS_ADMIN`, mounts `/dev`, runs `poll GET :50052/leader → nbd-client $LEADER 10809 /dev/nbd0`.
+* Node prerequisite (every app + storage node): `modprobe nbd` loaded and `/dev/nbd*` present, or connector/DaemonSet fails to attach.
 * `NetworkPolicy`: `:50051` only from StatefulSet, `:10809` only from connector. No ingress.
 * Config: peer list `1@vdrd-0.vdrd-headless:50051,...` static (ordinal → `--id` in `k8s-entry.sh`); auth token via Secret (NBD V1 — not yet enforced, see §6).
 
@@ -30,6 +31,7 @@ curl http://vdrd-0.vdrd-headless:50052/metrics
 # chaos (C1-C4): pod kill, minority partition, majority partition, app-node reboot
 kubectl delete pod vdrd-1 && kubectl get pods -w            # C1: re-elect, fsck clean
 kubectl exec -it vdrd-2 -- tc qdisc add dev eth0 root netem loss 100%  # C2: minority cut
+# (tc ships in the vdrd image via iproute2; if stripped, run the same via `kubectl debug`.)
 kubectl exec -it vdrd-2 -- tc qdisc del dev eth0 root       # heal: rejoins via log replay
 # C3: partition 2/3 -> writes correctly block; heal, single leader resumes.
 # C4: reboot app node -> connector reconnects, remount, data intact.

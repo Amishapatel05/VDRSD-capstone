@@ -5,64 +5,60 @@
 
 ## 1. Prereqs
 
-* Docker 24+, `docker compose` plugin, Linux with `nbd` module (`modprobe nbd`).
-* For native build: `g++-13, cmake>=3.28, libssl-dev, libz-dev`.
+* Docker 24+, `docker compose` plugin, Linux with `nbd` module (`modprobe nbd`), `curl`.
+* For native build: `g++, cmake>=3.28`; for `-DVDR_WITH_NURAFT=ON`: `libssl-dev, libz-dev`, network (FetchContent).
 
-## 2. Layout (flat + code)
+## 2. Layout
 
 ```text
-VDRSD-capstone/              <- you are here, git repo
- README.md                   <- index (this folder only)
- IMPLEMENTATION_PLAN.md      <- phased plan P0-P7
- DEVELOPMENT.md              <- this file (local dev)
- PRODUCTION.md               <- K3s deploy + ops
- CMakeLists.txt              <- (P0) FetchContent nuRaft
- src/{main,block_store,nbd_server,vdr_logstore,vdr_statemachine,raft_node,mgmt_http}.*
- tests/{block_store_test, replication.sh, kill_leader.sh, fio_bench.sh}
- Dockerfile.vdrd, Dockerfile.connector, docker-compose.yml
- k8s-apply.sh (generates k8s/ only at P6 — not yet, keep flat until then)
+VDRSD-capstone/
+ README.md  IMPLEMENTATION_PLAN.md  DEVELOPMENT.md  PRODUCTION.md  BENCH.md
+ CMakeLists.txt  Dockerfile.vdrd  Dockerfile.connector  docker-compose.yml
+ src/main.cpp  src/block_store.h  src/nbd_server.h  src/mgmt_http.h
+ src/vdr_logstore.h  src/vdr_raft_sm.h  src/vdr_raft.h
+ src/block_store_demo.cpp  src/nbd_demo.cpp
+ tests/replication.sh  tests/kill_leader.sh  tests/nbd_quorum.sh  tests/fio_bench.sh
+ tools/connect.sh  tools/k8s-entry.sh
+ k8s/ (P6 manifests)  bench/ (gitignored fio output)  vol0-2/ (gitignored)
 ```
 
-Rule: don't create `docs/` — keep `*.md` flat in this folder until P6.
+Per-node files in `/data`: `data.blk`, `raft.wal`, `commit.idx`, `cluster.conf`, `srv_state.bin`.
 
-## 3. Native build + unit test
+## 3. Native build + unit tests
 
 ```bash
-cmake -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo
+cmake -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo          # stdlib-only
+cmake -B build -DVDR_WITH_NURAFT=ON                       # + replication
 cmake --build build -j
-ctest --test-dir build -V
+ctest --test-dir build -V   # block_store_demo + nbd_demo (assert binaries, no gtest)
 ```
 
-Gates: `block_store_test`, `logstore_test`, `statemachine_test` green.
-
-## 4. Docker dev loop (P0-P5)
+## 4. Docker dev loop
 
 ```bash
-# single node NBD (P2)
-docker build -f Dockerfile.vdrd -t vdrd:dev .
-docker run --privileged -p 10809:10809 -v ./vol0:/data vdrd:dev --id 1 --data-dir /data
-sudo modprobe nbd && sudo nbd-client localhost 10809 /dev/nbd0
-sudo mkfs.ext4 /dev/nbd0 && sudo mount /dev/nbd0 /mnt/vd0
-
-# 3-node cluster (P3+)
-docker compose up --build
-./tests/replication.sh      # write via leader, sha256 match on all 3 vol*/data.blk
-./tests/kill_leader.sh      # kill leader, expect re-election <1s, I/O resumes
-./tests/fio_bench.sh        # 4k randwrite + 64k seq, records p50/p99
+docker compose up -d --build     # 3 nodes, RAFT=ON, --selftest 20 each boot
+./tests/replication.sh           # >=1 SELFTEST OK + live leader + sha equality
+./tests/kill_leader.sh           # cycle each node, leader re-elected every round
+./tests/nbd_quorum.sh            # 1MiB through leader NBD + quorum sha (needs /dev/nbd)
+./tests/fio_bench.sh             # fio numbers -> bench/ (needs fio)
 docker compose down -v
 ```
 
-Volumes: `./vol0,./vol1,./vol2` bind to `/data`. Delete to reset cluster.
+Volumes `./vol0,./vol1,./vol2` bind to `/data`. Delete to reset cluster. Note:
+`--selftest` re-runs on every (re)start with deterministic patterns, so restarts
+add more `SELFTEST OK` lines — scripts assert `>=1`, and sha must stay equal.
 
-## 5. Dev debugging
+## 5. Debugging
 
-* Leader: `curl localhost:50052/leader`, health `curl localhost:50052/health`.
-* Logs: `docker compose logs -f vdrd-0 | grep -E 'term|commit|corrupt'`.
-* Corrupt inject (P4 test): flip byte in `vol1/wal.log` → expect `corrupt_blocks==1`, client EIO, no ghost ACK.
-* NBD stall: `dmesg | tail` on host, `fio --rw=randwrite --bs=4k --size=256M`.
+* Leader: `curl localhost:15052/leader` (also `:15053`, `:15054`) → `vdrd-N:50051`.
+* Metrics: `curl localhost:15052/metrics` (`vdr_is_leader`, `vdr_leader_id`, `vdr_commit_index`).
+* Logs: `docker compose logs -f | grep -E 'SELFTEST|raft up|selftest skipped'`.
+* Corrupt WAL: flip a byte in `vol1/raft.wal` → node fails that record on load;
+  commit FNV mismatch → EIO to client, never ACKed. (No `corrupt_blocks` counter V1.)
+* NBD stall: `dmesg | tail` on host.
 
 ## 6. Dev don'ts
 
-* Don't add follower forwarding — followers must RST NBD, connector reconnects.
+* Don't add follower forwarding — followers RST NBD, connector reconnects.
 * Don't add NBD TLS / gRPC — nuRaft asio `:50051` is the only replication transport.
-* Don't tune perf before `kill_leader.sh` passes.
+* Don't tune perf before `replication.sh` + `kill_leader.sh` + `nbd_quorum.sh` are green.
