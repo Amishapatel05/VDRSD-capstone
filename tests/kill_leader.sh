@@ -8,6 +8,15 @@ for i in 0 1 2; do
   sleep 4
   docker compose start "vdrd-$i"
   sleep 8
+  # After each restart a leader must exist (re-election), not just equal files.
+  LEADER=""
+  for p in 15052 15053 15054; do
+    LEADER=$(curl -sf "http://localhost:$p/leader" 2>/dev/null | tr -d ' \r\n' || true)
+    [ -n "$LEADER" ] && [ "$LEADER" != "none" ] && break
+    LEADER=""
+  done
+  [ -n "$LEADER" ] || { echo "FAIL: no leader after cycling vdrd-$i"; exit 1; }
+  echo "leader after vdrd-$i cycle: $LEADER"
 done
 H0=$(sha256sum vol0/data.blk | cut -d' ' -f1)
 H1=$(sha256sum vol1/data.blk | cut -d' ' -f1)
