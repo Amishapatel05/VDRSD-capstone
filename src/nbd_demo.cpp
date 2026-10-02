@@ -97,15 +97,46 @@ int main() {
     srv.Run(&e); }).detach();
 
   int fd = Dial(kPort);
-  char hs[8 + 8 + 8 + 4 + 124];  // handshake
+  char hs[18];  // fixed-newstyle greeting: NBDMAGIC + IHAVEOPT + flags
   assert(RecvAll(fd, hs, sizeof hs));
-  uint64_t pw, mg, size;
+  uint64_t pw, mg;
+  uint16_t fl;
   memcpy(&pw, hs, 8);
   memcpy(&mg, hs + 8, 8);
-  memcpy(&size, hs + 16, 8);
+  memcpy(&fl, hs + 16, 2);
   assert(be64toh(pw) == 0x4E42444D41474943ULL);
-  assert(be64toh(mg) == 0x0000420281861253ULL);
-  assert(be64toh(size) == 16 * 4096);
+  assert(be64toh(mg) == 0x49484156454F5054ULL);
+  assert(be16toh(fl) == 0x0003);
+  {  // NBD_OPT_GO, empty export, no info requests.
+    char oh[16 + 6];
+    uint64_t m = htobe64(0x49484156454F5054ULL);
+    uint32_t id = htobe32(7), len = htobe32(6), nl = 0, nreq = 0;
+    memcpy(oh, &m, 8);
+    memcpy(oh + 8, &id, 4);
+    memcpy(oh + 12, &len, 4);
+    memcpy(oh + 16, &nl, 4);
+    memcpy(oh + 20, &nreq, 2);
+    assert(SendAll(fd, oh, sizeof oh));
+    char rh[16 + 12];  // INFO(export) reply.
+    assert(RecvAll(fd, rh, sizeof rh));
+    uint64_t rm;
+    uint32_t ro, rt, rl;
+    uint16_t it;
+    uint64_t size;
+    memcpy(&rm, rh, 8);
+    memcpy(&ro, rh + 8, 4);
+    memcpy(&rt, rh + 12, 4);
+    memcpy(&rl, rh + 16, 4);
+    memcpy(&it, rh + 20, 2);
+    memcpy(&size, rh + 22, 8);
+    assert(be64toh(rm) == 0x3E889045565A9ULL && be32toh(ro) == 7 && be32toh(rt) == 3);
+    assert(be32toh(rl) == 12 && be16toh(it) == 0 && be64toh(size) == 16 * 4096);
+    char ah[16];  // ACK.
+    assert(RecvAll(fd, ah, sizeof ah));
+    uint32_t at;
+    memcpy(&at, ah + 12, 4);
+    assert(be32toh(at) == 1);
+  }
 
   std::string blk(4096, 'A');  // aligned write + read
   Req(fd, 1, 7, 0, 4096, blk.data());

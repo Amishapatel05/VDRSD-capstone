@@ -60,9 +60,23 @@ class NbdServer {
 
  private:
   static constexpr uint64_t kInitPasswd = 0x4E42444D41474943ULL;  // "NBDMAGIC"
-  static constexpr uint64_t kOldMagic = 0x0000420281861253ULL;
+  static constexpr uint64_t kOldMagic = 0x0000420281861253ULL;  // (kept for reference; V1 serves fixed-newstyle)
+  static constexpr uint64_t kOptMagic = 0x49484156454F5054ULL;  // "IHAVEOPT"
+  static constexpr uint64_t kRepMagic = 0x3E889045565A9ULL;
   static constexpr uint32_t kReqMagic = 0x25609513;
-  static constexpr uint32_t kRepMagic = 0x67446698;
+  static constexpr uint32_t kNbdRepMagic = 0x67446698;
+  static constexpr uint16_t kHsFixedNewstyle = 0x0003;  // FIXED_NEWSTYLE|NO_ZEROES
+  static constexpr uint32_t kOptExportName = 1;
+  static constexpr uint32_t kOptAbort = 2;
+  static constexpr uint32_t kOptList = 3;
+  static constexpr uint32_t kOptInfo = 6;
+  static constexpr uint32_t kOptGo = 7;
+  static constexpr uint32_t kRepAck = 1;
+  static constexpr uint32_t kRepServer = 2;
+  static constexpr uint32_t kRepInfo = 3;
+  static constexpr uint32_t kRepErrUnsup = 0x80000002;  // no TLS / no other opts in V1
+  static constexpr uint16_t kFlagHasFlags = 0x0001;
+  static constexpr uint16_t kFlagSendFlush = 0x0004;
   static constexpr int kEio = 5;
   static constexpr uint32_t kMaxPayload = 1 << 20;  // cap per-request alloc (trust boundary).
 
@@ -105,10 +119,83 @@ class NbdServer {
   bool Reply(int fd, uint64_t handle, uint32_t error, const char* data, std::size_t n) {
     char h[16];
     char* p = h;
-    PutU32(p, kRepMagic);
+    PutU32(p, kNbdRepMagic);
     PutU32(p, error);
     PutU64(p, handle);
     return SendAll(fd, h, sizeof h) && (n == 0 || SendAll(fd, data, n));
+  }
+
+  static void AppendU16(std::string& s, uint16_t v) {
+    const uint16_t b = htobe16(v);
+    s.append(reinterpret_cast<const char*>(&b), 2);
+  }
+  static void AppendU32(std::string& s, uint32_t v) {
+    const uint32_t b = htobe32(v);
+    s.append(reinterpret_cast<const char*>(&b), 4);
+  }
+  static void AppendU64(std::string& s, uint64_t v) {
+    const uint64_t b = htobe64(v);
+    s.append(reinterpret_cast<const char*>(&b), 8);
+  }
+
+  bool SendOptReply(int fd, uint32_t opt, uint32_t type, const std::string& payload) {
+    std::string h;
+    AppendU64(h, kRepMagic);
+    AppendU32(h, opt);
+    AppendU32(h, type);
+    AppendU32(h, static_cast<uint32_t>(payload.size()));
+    return SendAll(fd, h.data(), h.size()) &&
+           (payload.empty() || SendAll(fd, payload.data(), payload.size()));
+  }
+
+  // Fixed-newstyle negotiation: single export (any name accepted), no TLS.
+  // Returns true once the connection enters the transmission phase.
+  bool Negotiate(int fd) {
+    char g[18];
+    char* p = g;
+    PutU64(p, kInitPasswd);
+    PutU64(p, kOptMagic);
+    PutU16(p, kHsFixedNewstyle);
+    if (!SendAll(fd, g, sizeof g)) return false;
+    for (;;) {
+      char oh[16];
+      if (!RecvAll(fd, oh, sizeof oh)) return false;
+      uint64_t magic;
+      uint32_t id, len;
+      std::memcpy(&magic, oh, 8);
+      std::memcpy(&id, oh + 8, 4);
+      std::memcpy(&len, oh + 12, 4);
+      magic = be64toh(magic);
+      id = be32toh(id);
+      len = be32toh(len);
+      if (magic != kOptMagic) return false;
+      if (len > 1 << 20) return false;
+      std::string data(len, '\0');
+      if (len && !RecvAll(fd, data.data(), len)) return false;
+      if (id == kOptAbort) {
+        SendOptReply(fd, id, kRepAck, "");
+        return false;
+      }
+      if (id == kOptExportName) return true;  // legacy: straight to transmission.
+      if (id == kOptInfo || id == kOptGo) {
+        std::string info;  // NBD_INFO_EXPORT: type(0) + size + tx flags.
+        AppendU16(info, 0);
+        AppendU64(info, store_->num_blocks() * BlockStore::kBlock);
+        AppendU16(info, kFlagHasFlags | kFlagSendFlush);
+        if (!SendOptReply(fd, id, kRepInfo, info)) return false;
+        if (!SendOptReply(fd, id, kRepAck, "")) return false;
+        if (id == kOptGo) return true;
+        continue;
+      }
+      if (id == kOptList) {  // one empty-named server, then ACK.
+        std::string srv;
+        AppendU32(srv, 0);
+        if (!SendOptReply(fd, id, kRepServer, srv)) return false;
+        if (!SendOptReply(fd, id, kRepAck, "")) return false;
+        continue;
+      }
+      if (!SendOptReply(fd, id, kRepErrUnsup, "")) return false;  // STARTTLS + unknown.
+    }
   }
 
   // Arbitrary (offset,len) over 4K blocks; write path is read-modify-write.
@@ -186,14 +273,7 @@ class NbdServer {
       ::close(fd);  // no follower forwarding: connector re-points nbd-client at leader.
       return;
     }
-    // Oldstyle handshake: passwd + magic + size + flags + 124 pad.
-    char h[8 + 8 + 8 + 4 + 124] = {};
-    char* p = h;
-    PutU64(p, kInitPasswd);
-    PutU64(p, kOldMagic);
-    PutU64(p, store_->num_blocks() * BlockStore::kBlock);
-    PutU32(p, 0);
-    if (!SendAll(fd, h, sizeof h)) {
+    if (!Negotiate(fd)) {
       ::close(fd);
       return;
     }

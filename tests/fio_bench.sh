@@ -3,18 +3,14 @@
 # against the LEADER's NBD. Results land in bench/*.txt for BENCH.md.
 set -eu
 cd "$(dirname "$0")/.."
+. ./tests/lib.sh
 command -v fio >/dev/null || { echo "SKIP: fio not installed"; exit 0; }
-MGMT="${MGMT:-localhost:15052,localhost:15053,localhost:15054}"
 DEV="${NBD_DEV:-/dev/nbd0}"
-LEADER=""
-for h in $(echo "$MGMT" | tr ',' ' '); do
-  LEADER=$(curl -sf "http://$h/leader" 2>/dev/null | tr -d ' \r\n' || true)
-  [ -n "$LEADER" ] && [ "$LEADER" != "none" ] && break
-  LEADER=""
-done
-[ -n "$LEADER" ] || { echo "FAIL: no leader reported"; exit 1; }
-H="${LEADER%:*}"
-P="${LEADER##*:}"
+LEADER=$(find_leader) || exit 1
+NBD=$(resolve_nbd "$LEADER") || exit 1
+H="${NBD%:*}"
+P="${NBD##*:}"
+echo "leader raft: $LEADER -> NBD $H:$P"
 sudo modprobe nbd || true
 sudo nbd-client -d "$DEV" 2>/dev/null || true
 sudo nbd-client "$H" "$P" "$DEV"
