@@ -1,0 +1,61 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: vdrd
+spec:
+  serviceName: vdrd-headless
+  replicas: 3
+  selector:
+    matchLabels:
+      app: vdrd
+  template:
+    metadata:
+      labels:
+        app: vdrd
+    spec:
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app: vdrd
+                topologyKey: kubernetes.io/hostname
+      containers:
+        - name: vdrd
+          # Replace with your registry; must be built with RAFT=ON (see Dockerfile.vdrd).
+          image: vdrd:raft
+          imagePullPolicy: IfNotPresent
+          command: ["/app/tools/k8s-entry.sh"]
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: BLOCKS
+              value: "262144" # 1 GiB; PVC is 10 GiB headroom for WAL/snapshots.
+          ports:
+            - name: nbd
+              containerPort: 10809
+            - name: raft
+              containerPort: 50051
+            - name: mgmt
+              containerPort: 50052
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: mgmt
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          volumeMounts:
+            - name: data
+              mountPath: /data
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 10Gi

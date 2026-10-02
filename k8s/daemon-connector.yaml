@@ -1,0 +1,32 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: vdr-connector
+spec:
+  selector:
+    matchLabels:
+      app: vdr-connector
+  template:
+    metadata:
+      labels:
+        app: vdr-connector
+    spec:
+      hostPID: true # nbd-client device acts on the host's /dev
+      containers:
+        - name: connector
+          image: vdr-connector:latest # from Dockerfile.connector
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            privileged: true # CAP_SYS_ADMIN for nbd-client + /dev/nbd*
+          env:
+            - name: MGMT_HOSTS
+              value: "vdrd-0.vdrd-headless:50052,vdrd-1.vdrd-headless:50052,vdrd-2.vdrd-headless:50052"
+            - name: NBD_DEV
+              value: /dev/nbd0
+          volumeMounts:
+            - name: dev
+              mountPath: /dev
+      volumes:
+        - name: dev
+          hostPath:
+            path: /dev

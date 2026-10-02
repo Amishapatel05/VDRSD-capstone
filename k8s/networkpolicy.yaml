@@ -1,0 +1,23 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: vdrd-net
+spec:
+  podSelector:
+    matchLabels:
+      app: vdrd
+  policyTypes: [Ingress]
+  ingress:
+    - ports: # Raft transport: cluster-internal only.
+        - port: 50051
+      from:
+        - podSelector:
+            matchLabels:
+              app: vdrd
+    - ports: # NBD + mgmt: connector nodes only (no public ingress).
+        - port: 10809
+        - port: 50052
+      from:
+        - podSelector:
+            matchLabels:
+              app: vdr-connector

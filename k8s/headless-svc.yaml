@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: vdrd-headless
+spec:
+  clusterIP: None
+  selector:
+    app: vdrd
+  ports:
+    - name: raft
+      port: 50051
+    - name: mgmt
+      port: 50052
