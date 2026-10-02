@@ -4,6 +4,7 @@
 #include <cerrno>
 #include <cstdint>
 #include <cstring>
+#include <mutex>
 #include <shared_mutex>
 #include <string>
 #include <unistd.h>
