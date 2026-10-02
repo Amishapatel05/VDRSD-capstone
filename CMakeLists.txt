@@ -13,6 +13,9 @@ option(VDR_WITH_NURAFT "Fetch and link nuRaft (P3+)" OFF)
 add_executable(vdrd src/main.cpp)
 target_include_directories(vdrd PRIVATE src)
 
+add_executable(block_store_demo src/block_store_demo.cpp)
+target_include_directories(block_store_demo PRIVATE src)
+
 if(VDR_WITH_NURAFT)
   find_package(OpenSSL REQUIRED)
   find_package(ZLIB REQUIRED)
