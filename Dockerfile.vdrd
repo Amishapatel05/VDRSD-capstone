@@ -7,7 +7,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /src
 COPY CMakeLists.txt ./
 COPY src/ ./src/
-RUN cmake -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo -DVDR_WITH_NURAFT=${RAFT} && cmake --build build -j
+RUN cmake -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo -DVDR_WITH_NURAFT=${RAFT} || (echo '--- nuraft populate logs ---'; find build/_deps -name '*.log' -exec sh -c 'echo "== $1"; tail -25 "$1"' _ {} \; ; exit 1) && cmake --build build -j
 
 FROM ubuntu:24.04
 RUN apt-get update && apt-get install -y --no-install-recommends libstdc++6 iproute2 \
