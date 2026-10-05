@@ -107,6 +107,10 @@ int main() {
   assert(be64toh(pw) == 0x4E42444D41474943ULL);
   assert(be64toh(mg) == 0x49484156454F5054ULL);
   assert(be16toh(fl) == 0x0003);
+  {  // fixed newstyle: client flags word first (C_FIXED_NEWSTYLE).
+    uint32_t cf = htobe32(1);
+    assert(SendAll(fd, reinterpret_cast<const char*>(&cf), sizeof cf));
+  }
   {  // NBD_OPT_GO, empty export, no info requests.
     char oh[16 + 6];
     uint64_t m = htobe64(0x49484156454F5054ULL);

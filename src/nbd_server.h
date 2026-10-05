@@ -158,6 +158,11 @@ class NbdServer {
     PutU64(p, kOptMagic);
     PutU16(p, kHsFixedNewstyle);
     if (!SendAll(fd, g, sizeof g)) return false;
+    // Fixed newstyle mandates a 4-byte client flags field right after the
+    // greeting (we advertise FIXED_NEWSTYLE). Missing this desyncs the whole
+    // stream: the flags get parsed as an option header. Content ignored.
+    char cf[4];
+    if (!RecvAll(fd, cf, sizeof cf)) return false;
     for (;;) {
       char oh[16];
       if (!RecvAll(fd, oh, sizeof oh)) return false;
