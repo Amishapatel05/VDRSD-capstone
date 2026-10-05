@@ -1,0 +1,140 @@
+#!/usr/bin/env bash
+# vdrctl — friendly front door to the VDRSD project.
+# Starts, shows, tests, and stops the cluster. No new dependencies (bash+curl).
+# Usage: ./vdrctl <command>  |  ./vdrctl menu  (interactive)
+set -uo pipefail
+cd "$(dirname "$0")"
+
+BOLD='\033[1m'; DIM='\033[2m'; RED='\033[31m'; GRN='\033[32m'; YLW='\033[33m'; BLU='\033[34m'; RST='\033[0m'
+MGMT_PORTS="15052 15053 15054"
+
+say()  { printf "${BOLD}==>${RST} %s\n" "$*"; }
+ok()   { printf "${GRN}  ok${RST} %s\n" "$*"; }
+warn() { printf "${YLW}  !!${RST} %s\n" "$*"; }
+die()  { printf "${RED}FAIL${RST} %s\n" "$*"; exit 1; }
+need() { command -v "$1" >/dev/null || die "missing '$1' — install it first"; }
+
+leader() { # prints "host:port" or nothing
+  for p in $MGMT_PORTS; do
+    ep=$(curl -sf --max-time 3 "http://localhost:$p/leader" 2>/dev/null | tr -d ' \r\n' || true)
+    if [ -n "$ep" ] && [ "$ep" != "none" ]; then echo "$ep"; return 0; fi
+  done
+  return 1
+}
+
+cmd_help() {
+  printf "${BOLD}vdrctl${RST} — Virtual Distributed Replicated Storage Device\n\n"
+  printf "  ${BLU}up${RST}         start the 3-node cluster (builds images)\n"
+  printf "  ${BLU}status${RST}     dashboard: containers, leader, metrics, replica hashes\n"
+  printf "  ${BLU}test [what]${RST} run gates: all | unit | replication | kill | quorum\n"
+  printf "  ${BLU}bench${RST}      fio benchmark into bench/ (needs fio + /dev/nbd)\n"
+  printf "  ${BLU}failover${RST}   kill the leader, verify re-election, verify data\n"
+  printf "  ${BLU}logs [svc]${RST} follow logs (default: all)\n"
+  printf "  ${BLU}down [-v]${RST}   stop the cluster (-v also wipes volumes)\n"
+  printf "  ${BLU}menu${RST}       interactive mode\n"
+}
+
+cmd_up() {
+  need docker; docker compose version >/dev/null 2>&1 || die "docker compose plugin missing"
+  say "starting cluster (first build compiles nuRaft — minutes, only once)"
+  mkdir -p vol0 vol1 vol2
+  if command -v chcon >/dev/null; then chcon -Rt svirt_sandbox_file_t vol0 vol1 vol2 2>/dev/null || true; fi
+  docker compose up -d --build || die "compose up failed"
+  say "waiting for election + selftest (20s)"
+  sleep 20
+  ep=$(leader) || { docker compose logs --tail=20; die "no leader elected — logs above"; }
+  ok "leader: $ep"
+  cmd_status
+}
+
+cmd_status() {
+  need docker; need curl
+  printf "${BOLD}--- containers ---${RST}\n"
+  docker compose ps 2>/dev/null || warn "daemon unreachable / nothing running"
+  printf "${BOLD}--- leader ---${RST}\n"
+  ep=$(leader) && ok "leader: $ep" || warn "no leader reported"
+  printf "${BOLD}--- metrics ---${RST}\n"
+  for p in $MGMT_PORTS; do
+    m=$(curl -sf --max-time 3 "localhost:$p/metrics" 2>/dev/null || true)
+    [ -n "$m" ] && printf "${DIM}[:$p]${RST}\n$m\n"
+  done
+  printf "${BOLD}--- replicas ---${RST}\n"
+  if ls vol*/data.blk >/dev/null 2>&1; then
+    sha256sum vol*/data.blk
+  else
+    warn "no volumes yet (cluster never came up?)"
+  fi
+}
+
+cmd_test() {
+  what="${1:-all}"
+  case "$what" in
+    unit) need cmake
+      say "native build + ctest"
+      cmake -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo >/dev/null || die "configure failed"
+      cmake --build build -j || die "build failed"
+      ctest --test-dir build || die "ctest failed"
+      ok "unit green";;
+    replication) say "gate: replication"; ./tests/replication.sh && ok "replication green";;
+    kill)        say "gate: rolling kill"; ./tests/kill_leader.sh && ok "kill green";;
+    quorum)      say "gate: NBD quorum (needs /dev/nbd)"; ./tests/nbd_quorum.sh && ok "quorum green";;
+    all) cmd_test unit && ./tests/replication.sh && ./tests/kill_leader.sh && ./tests/nbd_quorum.sh && ok "ALL GREEN";;
+    *) die "unknown gate '$what' (unit|replication|kill|quorum|all)";;
+  esac
+}
+
+cmd_bench() { say "benchmark (needs fio + /dev/nbd)"; ./tests/fio_bench.sh; }
+
+cmd_failover() {
+  need docker
+  ep=$(leader) || die "no leader to kill (is the cluster up?)"
+  say "killing leader $ep"
+  # leader endpoint is cluster-DNS (vdrd-N) or 127.0.0.1:port; map to compose service
+  svc=""
+  case "$ep" in
+    vdrd-0*) svc=vdrd-0;; vdrd-1*) svc=vdrd-1;; vdrd-2*) svc=vdrd-2;;
+    *:50051) svc=vdrd-0;; *:50052) svc=vdrd-1;; *:50053) svc=vdrd-2;;
+  esac
+  [ -n "$svc" ] || die "cannot map leader $ep to a service"
+  docker compose kill "$svc" || die "kill failed"
+  sleep 8
+  ep2=$(leader) || die "no new leader after kill"
+  ok "new leader: $ep2"
+  say "restarting $svc and checking reconvergence"
+  docker compose start "$svc"; sleep 8
+  ./tests/replication.sh && ok "failover complete, data converged"
+}
+
+cmd_logs() { need docker; docker compose logs -f "${1:-}"; }
+
+cmd_down() {
+  need docker
+  if [ "${1:-}" = "-v" ]; then
+    say "stopping + wiping volumes"; docker compose down -v
+  else
+    say "stopping (volumes kept)"; docker compose down
+  fi
+  ok "stopped"
+}
+
+cmd_menu() {
+  while true; do
+    printf "\n${BOLD}vdrctl menu${RST}  ${DIM}(cluster: "
+    leader >/dev/null 2>&1 && printf "${GRN}UP${RST}${DIM}" || printf "${RED}DOWN${RST}${DIM}"
+    printf ")${RST}\n"
+    printf " 1) up  2) status  3) test all  4) test unit  5) failover  6) bench  7) logs  8) down  9) down -v  0) quit\n"
+    printf "choice: "; read -r c
+    case "$c" in
+      1) cmd_up;; 2) cmd_status;; 3) cmd_test all;; 4) cmd_test unit;;
+      5) cmd_failover;; 6) cmd_bench;; 7) cmd_logs;; 8) cmd_down;; 9) cmd_down -v;;
+      0) exit 0;; *) warn "pick 0-9";;
+    esac
+  done
+}
+
+case "${1:-help}" in
+  up) shift; cmd_up "$@";; status) cmd_status;; test) shift; cmd_test "${1:-all}";;
+  bench) cmd_bench;; failover) cmd_failover;; logs) shift; cmd_logs "${1:-}";;
+  down) shift; cmd_down "${1:-}";; menu) cmd_menu;;
+  help|--help|-h) cmd_help;; *) die "unknown command '$1' — try: ./vdrctl help";;
+esac

@@ -14,14 +14,16 @@ Stack: NBD oldstyle + nuRaft + plain-file. No follower forwarding, no NBD TLS in
 ## Test matrix (run on your box — no toolchain in this snapshot env)
 
 ```bash
-cmake -B build -DVDR_WITH_NURAFT=ON && cmake --build build -j
-./build/block_store_demo && ./build/nbd_demo   # P1+P2 loopback checks
-docker compose up -d --build
-./tests/replication.sh    # P3: elect + 20 replicated writes + sha equality
-./tests/kill_leader.sh    # P3: cycle every node, reconverge
-./tests/nbd_quorum.sh     # P4: 1MiB through leader NBD + quorum sha (needs /dev/nbd)
-./tests/fio_bench.sh      # P5: fio numbers -> bench/ (needs fio)
+./vdrctl up              # build + start 3-node cluster
+./vdrctl status          # containers, leader, metrics, replica hashes
+./vdrctl test all        # unit + replication + kill + NBD quorum
+./vdrctl failover        # kill leader, verify re-election + convergence
+./vdrctl bench           # fio numbers -> bench/ (needs fio)
+./vdrctl down            # stop (volumes kept); ./vdrctl menu for interactive
 ```
+
+Raw equivalents (no wrapper): `cmake -B build -DVDR_WITH_NURAFT=ON && ...`
+plus `tests/*.sh` — see `DEVELOPMENT.md`.
 
 ## Quickstart (dev)
 
