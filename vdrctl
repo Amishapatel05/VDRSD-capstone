@@ -40,6 +40,8 @@ cmd_help() {
   printf "  ${BLU}bench${RST}      measure speed (needs the fio tool + a disk device)\n"
   printf "  ${BLU}failover${RST}   pull the plug on the leader and watch recovery happen\n"
   printf "  ${BLU}logs [node]${RST} watch what the nodes are saying (default: all)\n"
+  printf "  ${BLU}connect${RST}    attach the leader's disk as /dev/nbd0 (finds the leader itself)\n"
+  printf "  ${BLU}disconnect${RST} detach /dev/nbd0 again\n"
   printf "  ${BLU}down [-v]${RST}   shut everything down (-v also deletes stored files)\n"
   printf "  ${BLU}menu${RST}       step-by-step mode with explanations\n"
 }
@@ -123,6 +125,28 @@ cmd_failover() {
 
 cmd_logs() { need docker; docker compose logs -f "${1:-}"; }
 
+cmd_connect() {
+  need nbd-client
+  dev="${NBD_DEV:-/dev/nbd0}"
+  ep=$(leader) || die "no leader right now (start the cluster first: ./vdrctl up)"
+  svc=$(leader_node "$ep")
+  case "$svc" in
+    node-0) port=10809;; node-1) port=10810;; node-2) port=10811;;
+    *) die "could not map leader '$ep' to a disk port";;
+  esac
+  say "leader is $svc ($ep) — attaching its disk as $dev"
+  sudo modprobe nbd 2>/dev/null || warn "could not load the nbd module (already loaded?)"
+  sudo nbd-client -d "$dev" 2>/dev/null || true
+  sudo nbd-client localhost "$port" "$dev" || die "attach failed — server said: $(docker compose logs --tail=3 "$svc" 2>/dev/null | grep -E 'nbd|RST' || echo 'check ./vdrctl logs')"
+  ok "$dev is live — try: sudo mkfs.ext4 $dev (first time) then mount it"
+}
+
+cmd_disconnect() {
+  dev="${NBD_DEV:-/dev/nbd0}"
+  say "detaching $dev (unmount it first if mounted)"
+  sudo nbd-client -d "$dev" 2>/dev/null && ok "detached" || warn "nothing was attached"
+}
+
 cmd_down() {
   need docker
   if [ "${1:-}" = "-v" ]; then
@@ -152,12 +176,14 @@ cmd_menu() {
     printf " 5) Pull the plug on the leader (failover demo)\n"
     printf " 6) Measure speed\n"
     printf " 7) Watch the logs\n"
-    printf " 8) Shut down (keep files)   9) Shut down + delete files   0) Quit\n"
+    printf " 8) Attach the disk (/dev/nbd0)   9) Detach it\n"
+    printf " 10) Shut down (keep files)  11) Shut down + delete files  0) Quit\n"
     printf "choice: "; read -r c
     case "$c" in
       1) cmd_up;; 2) cmd_status;; 3) cmd_test all;; 4) cmd_test unit;;
-      5) cmd_failover;; 6) cmd_bench;; 7) cmd_logs;; 8) cmd_down;; 9) cmd_down -v;;
-      0) printf "bye!\n"; exit 0;; *) warn "please pick a number 0-9";;
+      5) cmd_failover;; 6) cmd_bench;; 7) cmd_logs;; 8) cmd_connect;; 9) cmd_disconnect;;
+      10) cmd_down;; 11) cmd_down -v;;
+      0) printf "bye!\n"; exit 0;; *) warn "please pick a number 0-11";;
     esac
   done
 }
@@ -165,6 +191,6 @@ cmd_menu() {
 case "${1:-help}" in
   up) shift; cmd_up "$@";; status) cmd_status;; test) shift; cmd_test "${1:-all}";;
   bench) cmd_bench;; failover) cmd_failover;; logs) shift; cmd_logs "${1:-}";;
-  down) shift; cmd_down "${1:-}";; menu) cmd_menu;;
+  connect) cmd_connect;; disconnect) cmd_disconnect;;  down) shift; cmd_down "${1:-}";; menu) cmd_menu;;
   help|--help|-h) cmd_help;; *) die "I don't know '$1' — try: ./vdrctl help";;
 esac
