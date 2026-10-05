@@ -49,7 +49,7 @@ cmd_up() {
   say "starting the 3 storage nodes (first build takes a few minutes — only once)"
   mkdir -p vol0 vol1 vol2
   if command -v chcon >/dev/null; then chcon -Rt svirt_sandbox_file_t vol0 vol1 vol2 2>/dev/null || true; fi
-  docker compose up -d --build || die "could not start — see the error above"
+  docker compose up -d --build --remove-orphans || die "could not start — see the error above"
   say "giving the nodes ~45 seconds to meet and pick a leader (staggered starts)"
   sleep 45
   ep=$(leader) || { docker compose logs --tail=20; die "no leader was picked — clues above"; }
