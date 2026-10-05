@@ -23,11 +23,14 @@ leader() { # prints "host:port" of the node currently in charge, or nothing
   return 1
 }
 
-leader_node() { # "host:port" -> node-0/1/2 (works for cluster and localhost names)
-  case "$1" in
-    *node-0*|*:50051) echo "node-0";;
-    *node-1*|*:50052) echo "node-1";;
-    *node-2*|*:50053) echo "node-2";;
+leader_node() { # "host:port" -> node-0/1/2. Hostname wins: in-cluster raft port
+  case "$1" in # is 50051 on ALL nodes; only localhost runs encode id in the port.
+    *node-0*) echo "node-0";;
+    *node-1*) echo "node-1";;
+    *node-2*) echo "node-2";;
+    *:50051) echo "node-0";;
+    *:50052) echo "node-1";;
+    *:50053) echo "node-2";;
     *) echo "";;
   esac
 }
@@ -123,7 +126,10 @@ cmd_failover() {
   ./tests/replication.sh && ok "recovery complete: all 3 copies match again"
 }
 
-cmd_logs() { need docker; docker compose logs -f "${1:-}"; }
+cmd_logs() {
+  need docker
+  if [ -n "${1:-}" ]; then docker compose logs -f "$1"; else docker compose logs -f; fi
+}
 
 cmd_connect() {
   need nbd-client
