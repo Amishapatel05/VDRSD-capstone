@@ -79,7 +79,9 @@ class NbdServer {
   static constexpr uint16_t kFlagHasFlags = 0x0001;
   static constexpr uint16_t kFlagSendFlush = 0x0004;
   static constexpr int kEio = 5;
-  static constexpr uint32_t kMaxPayload = 1 << 20;  // cap per-request alloc (trust boundary).
+  static constexpr uint32_t kMaxPayload = 32 << 20;  // cap per-request alloc (trust boundary).
+  // 32 MiB: comfortably above any kernel bio merge (mke2fs sent 4 MiB). The
+  // per-block loop below means steady memory, not payload-sized spikes.
 
   static bool SendAll(int fd, const char* p, std::size_t n) {
     while (n) {
