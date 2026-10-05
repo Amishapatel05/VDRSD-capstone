@@ -3,5 +3,7 @@ vol0/
 vol1/
 vol2/
 bench/
+k8s/
+presentation-docs.md
 *.o
 compile_commands.json
