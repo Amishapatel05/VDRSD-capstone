@@ -4,6 +4,7 @@
 // ponytail: thread-per-conn; pool only if many concurrent clients measured.
 #include <algorithm>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <functional>
 #include <string>
@@ -270,13 +271,16 @@ class NbdServer {
 
   void Session(int fd) {
     if (quorum() && !is_leader_()) {
+      std::fprintf(stderr, "[nbd] RST non-leader connection (fd=%d)\n", fd);
       ::close(fd);  // no follower forwarding: connector re-points nbd-client at leader.
       return;
     }
     if (!Negotiate(fd)) {
+      std::fprintf(stderr, "[nbd] negotiation failed (fd=%d)\n", fd);
       ::close(fd);
       return;
     }
+    std::fprintf(stderr, "[nbd] session established (fd=%d)\n", fd);
     for (;;) {
       char rh[28];
       if (!RecvAll(fd, rh, sizeof rh)) break;
