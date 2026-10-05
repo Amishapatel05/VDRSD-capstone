@@ -135,7 +135,9 @@ cmd_connect() {
     *) die "could not map leader '$ep' to a disk port";;
   esac
   say "leader is $svc ($ep) — attaching its disk as $dev"
-  sudo modprobe nbd 2>/dev/null || warn "could not load the nbd module (already loaded?)"
+  if ! ls /dev/nbd* >/dev/null 2>&1; then
+    sudo modprobe nbd || warn "could not load the nbd module — is it built into your kernel?"
+  fi
   sudo nbd-client -d "$dev" 2>/dev/null || true
   sudo nbd-client localhost "$port" "$dev" || die "attach failed — server said: $(docker compose logs --tail=3 "$svc" 2>/dev/null | grep -E 'nbd|RST' || echo 'check ./vdrctl logs')"
   ok "$dev is live — try: sudo mkfs.ext4 $dev (first time) then mount it"
