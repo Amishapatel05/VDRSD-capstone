@@ -1,15 +1,17 @@
-# P4: 3-node quorum cluster. NBD is leader-gated (followers RST; see connect.sh).
+# 3-node quorum cluster: containers are plainly named node-0, node-1, node-2.
+# NBD is leader-gated (followers RST; see connect.sh).
 # Mgmt on host 15052-15054, NBD on 10809-10811.
 # Image builds with -DVDR_WITH_NURAFT=ON via RAFT build-arg (needs network for FetchContent).
 # Stdlib-only build still available: docker build -f Dockerfile.vdrd --build-arg RAFT=OFF .
 services:
-  vdrd-0:
+  node-0:
     build:
       context: .
       dockerfile: Dockerfile.vdrd
       args:
         RAFT: "ON"
-    hostname: vdrd-0
+    container_name: node-0
+    hostname: node-0
     ports:
       - "10809:10809"
       - "50051:50051"
@@ -17,14 +19,15 @@ services:
     volumes:
       - ./vol0:/data
     command: ["--id", "1", "--data-dir", "/data", "--serve", "--blocks", "65536",
-              "--peers", "1@vdrd-0:50051,2@vdrd-1:50051,3@vdrd-2:50051", "--selftest", "20"]
-  vdrd-1:
+              "--peers", "1@node-0:50051,2@node-1:50051,3@node-2:50051", "--selftest", "20"]
+  node-1:
     build:
       context: .
       dockerfile: Dockerfile.vdrd
       args:
         RAFT: "ON"
-    hostname: vdrd-1
+    container_name: node-1
+    hostname: node-1
     ports:
       - "10810:10809"
       - "50052:50051"
@@ -32,14 +35,15 @@ services:
     volumes:
       - ./vol1:/data
     command: ["--id", "2", "--data-dir", "/data", "--serve", "--blocks", "65536",
-              "--peers", "1@vdrd-0:50051,2@vdrd-1:50051,3@vdrd-2:50051", "--selftest", "20"]
-  vdrd-2:
+              "--peers", "1@node-0:50051,2@node-1:50051,3@node-2:50051", "--selftest", "20"]
+  node-2:
     build:
       context: .
       dockerfile: Dockerfile.vdrd
       args:
         RAFT: "ON"
-    hostname: vdrd-2
+    container_name: node-2
+    hostname: node-2
     ports:
       - "10811:10809"
       - "50053:50051"
@@ -47,4 +51,4 @@ services:
     volumes:
       - ./vol2:/data
     command: ["--id", "3", "--data-dir", "/data", "--serve", "--blocks", "65536",
-              "--peers", "1@vdrd-0:50051,2@vdrd-1:50051,3@vdrd-2:50051", "--selftest", "20"]
+              "--peers", "1@node-0:50051,2@node-1:50051,3@node-2:50051", "--selftest", "20"]

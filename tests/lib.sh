@@ -7,7 +7,7 @@ resolve_nbd() {
   h="${ep%:*}"
   p="${ep##*:}"
   case "$h" in
-    vdrd-*) n="${h##*-}" ;;
+    vdrd-*|node-*) n="${h##*-}" ;;
     *) n=$((p - 50051)) ;;
   esac
   case "$n" in

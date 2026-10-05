@@ -3,10 +3,10 @@
 set -eu
 cd "$(dirname "$0")/.."
 for i in 0 1 2; do
-  echo "--- cycling vdrd-$i ---"
-  docker compose stop "vdrd-$i"
+  echo "--- cycling node-$i ---"
+  docker compose stop "node-$i"
   sleep 4
-  docker compose start "vdrd-$i"
+  docker compose start "node-$i"
   sleep 8
   # After each restart a leader must exist (re-election), not just equal files.
   LEADER=""
@@ -15,8 +15,8 @@ for i in 0 1 2; do
     [ -n "$LEADER" ] && [ "$LEADER" != "none" ] && break
     LEADER=""
   done
-  [ -n "$LEADER" ] || { echo "FAIL: no leader after cycling vdrd-$i"; exit 1; }
-  echo "leader after vdrd-$i cycle: $LEADER"
+  [ -n "$LEADER" ] || { echo "FAIL: no leader after cycling node-$i"; exit 1; }
+  echo "leader after node-$i cycle: $LEADER"
 done
 H0=$(sha256sum vol0/data.blk | cut -d' ' -f1)
 H1=$(sha256sum vol1/data.blk | cut -d' ' -f1)

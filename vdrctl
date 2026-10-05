@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# vdrctl — friendly front door to the VDRSD project.
-# Starts, shows, tests, and stops the cluster. No new dependencies (bash+curl).
-# Usage: ./vdrctl <command>  |  ./vdrctl menu  (interactive)
+# vdrctl — the friendly front door to VDRSD (a virtual hard disk spread over
+# 3 storage nodes so no single computer failure loses your files).
+# No jargon needed: nodes are just called node-0, node-1, node-2.
+# Usage: ./vdrctl menu   (pick numbers, plain explanations throughout)
 set -uo pipefail
 cd "$(dirname "$0")"
 
@@ -9,12 +10,12 @@ BOLD='\033[1m'; DIM='\033[2m'; RED='\033[31m'; GRN='\033[32m'; YLW='\033[33m'; B
 MGMT_PORTS="15052 15053 15054"
 
 say()  { printf "${BOLD}==>${RST} %s\n" "$*"; }
-ok()   { printf "${GRN}  ok${RST} %s\n" "$*"; }
-warn() { printf "${YLW}  !!${RST} %s\n" "$*"; }
-die()  { printf "${RED}FAIL${RST} %s\n" "$*"; exit 1; }
-need() { command -v "$1" >/dev/null || die "missing '$1' — install it first"; }
+ok()   { printf "${GRN}  done:${RST} %s\n" "$*"; }
+warn() { printf "${YLW}  heads-up:${RST} %s\n" "$*"; }
+die()  { printf "${RED}stopped:${RST} %s\n" "$*"; exit 1; }
+need() { command -v "$1" >/dev/null || die "the '$1' program is missing — install it first"; }
 
-leader() { # prints "host:port" or nothing
+leader() { # prints "host:port" of the node currently in charge, or nothing
   for p in $MGMT_PORTS; do
     ep=$(curl -sf --max-time 3 "http://localhost:$p/leader" 2>/dev/null | tr -d ' \r\n' || true)
     if [ -n "$ep" ] && [ "$ep" != "none" ]; then echo "$ep"; return 0; fi
@@ -22,47 +23,61 @@ leader() { # prints "host:port" or nothing
   return 1
 }
 
+leader_node() { # "host:port" -> node-0/1/2 (works for cluster and localhost names)
+  case "$1" in
+    *node-0*|*:50051) echo "node-0";;
+    *node-1*|*:50052) echo "node-1";;
+    *node-2*|*:50053) echo "node-2";;
+    *) echo "";;
+  esac
+}
+
 cmd_help() {
-  printf "${BOLD}vdrctl${RST} — Virtual Distributed Replicated Storage Device\n\n"
-  printf "  ${BLU}up${RST}         start the 3-node cluster (builds images)\n"
-  printf "  ${BLU}status${RST}     dashboard: containers, leader, metrics, replica hashes\n"
-  printf "  ${BLU}test [what]${RST} run gates: all | unit | replication | kill | quorum\n"
-  printf "  ${BLU}bench${RST}      fio benchmark into bench/ (needs fio + /dev/nbd)\n"
-  printf "  ${BLU}failover${RST}   kill the leader, verify re-election, verify data\n"
-  printf "  ${BLU}logs [svc]${RST} follow logs (default: all)\n"
-  printf "  ${BLU}down [-v]${RST}   stop the cluster (-v also wipes volumes)\n"
-  printf "  ${BLU}menu${RST}       interactive mode\n"
+  printf "${BOLD}vdrctl${RST} — your replicated virtual disk, in plain words\n\n"
+  printf "  ${BLU}up${RST}         start the 3 storage nodes (builds everything first)\n"
+  printf "  ${BLU}status${RST}     health page: which nodes run, who is in charge, copies match?\n"
+  printf "  ${BLU}test [what]${RST} prove it works: all | unit | replication | kill | quorum\n"
+  printf "  ${BLU}bench${RST}      measure speed (needs the fio tool + a disk device)\n"
+  printf "  ${BLU}failover${RST}   pull the plug on the leader and watch recovery happen\n"
+  printf "  ${BLU}logs [node]${RST} watch what the nodes are saying (default: all)\n"
+  printf "  ${BLU}down [-v]${RST}   shut everything down (-v also deletes stored files)\n"
+  printf "  ${BLU}menu${RST}       step-by-step mode with explanations\n"
 }
 
 cmd_up() {
-  need docker; docker compose version >/dev/null 2>&1 || die "docker compose plugin missing"
-  say "starting cluster (first build compiles nuRaft — minutes, only once)"
+  need docker; docker compose version >/dev/null 2>&1 || die "the docker compose plugin is missing"
+  say "starting the 3 storage nodes (first build takes a few minutes — only once)"
   mkdir -p vol0 vol1 vol2
   if command -v chcon >/dev/null; then chcon -Rt svirt_sandbox_file_t vol0 vol1 vol2 2>/dev/null || true; fi
-  docker compose up -d --build || die "compose up failed"
-  say "waiting for election + selftest (20s)"
+  docker compose up -d --build || die "could not start — see the error above"
+  say "giving the nodes ~20 seconds to meet and pick a leader"
   sleep 20
-  ep=$(leader) || { docker compose logs --tail=20; die "no leader elected — logs above"; }
-  ok "leader: $ep"
+  ep=$(leader) || { docker compose logs --tail=20; die "no leader was picked — clues above"; }
+  ok "the cluster is up; $(leader_node "$ep") is in charge ($ep)"
   cmd_status
 }
 
 cmd_status() {
   need docker; need curl
-  printf "${BOLD}--- containers ---${RST}\n"
-  docker compose ps 2>/dev/null || warn "daemon unreachable / nothing running"
-  printf "${BOLD}--- leader ---${RST}\n"
-  ep=$(leader) && ok "leader: $ep" || warn "no leader reported"
-  printf "${BOLD}--- metrics ---${RST}\n"
+  printf "${BOLD}--- storage nodes ---${RST}  ${DIM}(want: 3 running)${RST}\n"
+  docker compose ps 2>/dev/null || warn "docker is unreachable or nothing started yet"
+  printf "${BOLD}--- who is in charge ---${RST}\n"
+  if ep=$(leader); then
+    ok "$(leader_node "$ep") is the leader ($ep) — all reads and writes go through it"
+  else
+    warn "no leader right now (nodes still starting, or majority is down)"
+  fi
+  printf "${BOLD}--- node details ---${RST}\n"
   for p in $MGMT_PORTS; do
     m=$(curl -sf --max-time 3 "localhost:$p/metrics" 2>/dev/null || true)
-    [ -n "$m" ] && printf "${DIM}[:$p]${RST}\n$m\n"
+    [ -n "$m" ] && printf "${DIM}[check port :$p]${RST}\n$m\n"
   done
-  printf "${BOLD}--- replicas ---${RST}\n"
+  printf "${BOLD}--- are all 3 copies identical? ---${RST}\n"
   if ls vol*/data.blk >/dev/null 2>&1; then
     sha256sum vol*/data.blk
+    printf "${DIM}matching lines above = every node holds the same disk${RST}\n"
   else
-    warn "no volumes yet (cluster never came up?)"
+    warn "no saved files yet — the cluster has never fully started"
   fi
 }
 
@@ -70,39 +85,40 @@ cmd_test() {
   what="${1:-all}"
   case "$what" in
     unit) need cmake
-      say "native build + ctest"
-      cmake -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo >/dev/null || die "configure failed"
-      cmake --build build -j || die "build failed"
-      ctest --test-dir build || die "ctest failed"
-      ok "unit green";;
-    replication) say "gate: replication"; ./tests/replication.sh && ok "replication green";;
-    kill)        say "gate: rolling kill"; ./tests/kill_leader.sh && ok "kill green";;
-    quorum)      say "gate: NBD quorum (needs /dev/nbd)"; ./tests/nbd_quorum.sh && ok "quorum green";;
-    all) cmd_test unit && ./tests/replication.sh && ./tests/kill_leader.sh && ./tests/nbd_quorum.sh && ok "ALL GREEN";;
-    *) die "unknown gate '$what' (unit|replication|kill|quorum|all)";;
+      say "building the code and running its built-in self-checks"
+      cmake -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo >/dev/null || die "setup step failed"
+      cmake --build build -j || die "compile failed — send me the first error"
+      ctest --test-dir build || die "a self-check failed"
+      ok "all built-in checks pass";;
+    replication)
+      say "check: what the leader writes, all 3 nodes store (compares the files)"
+      ./tests/replication.sh && ok "every copy matches";;
+    kill)
+      say "check: stopping each node one by one — the rest must keep going"
+      ./tests/kill_leader.sh && ok "the cluster survived every stop";;
+    quorum)
+      say "check: writing through the real disk device (needs a disk device + admin rights)"
+      ./tests/nbd_quorum.sh && ok "disk write landed on all copies";;
+    all) cmd_test unit && ./tests/replication.sh && ./tests/kill_leader.sh && ./tests/nbd_quorum.sh && ok "EVERYTHING GREEN — the project works end to end";;
+    *) die "unknown check '$what' (pick: unit|replication|kill|quorum|all)";;
   esac
 }
 
-cmd_bench() { say "benchmark (needs fio + /dev/nbd)"; ./tests/fio_bench.sh; }
+cmd_bench() { say "measuring speed (needs the fio tool + a disk device)"; ./tests/fio_bench.sh; }
 
 cmd_failover() {
   need docker
-  ep=$(leader) || die "no leader to kill (is the cluster up?)"
-  say "killing leader $ep"
-  # leader endpoint is cluster-DNS (vdrd-N) or 127.0.0.1:port; map to compose service
-  svc=""
-  case "$ep" in
-    vdrd-0*) svc=vdrd-0;; vdrd-1*) svc=vdrd-1;; vdrd-2*) svc=vdrd-2;;
-    *:50051) svc=vdrd-0;; *:50052) svc=vdrd-1;; *:50053) svc=vdrd-2;;
-  esac
-  [ -n "$svc" ] || die "cannot map leader $ep to a service"
-  docker compose kill "$svc" || die "kill failed"
+  ep=$(leader) || die "no leader to stop (is the cluster running? try: ./vdrctl up)"
+  svc=$(leader_node "$ep")
+  [ -n "$svc" ] || die "could not tell which node '$ep' is"
+  say "stopping the leader ($svc) — watch the rest elect a replacement"
+  docker compose kill "$svc" || die "could not stop it"
   sleep 8
-  ep2=$(leader) || die "no new leader after kill"
-  ok "new leader: $ep2"
-  say "restarting $svc and checking reconvergence"
+  ep2=$(leader) || die "no replacement appeared — something is really wrong, check: ./vdrctl logs"
+  ok "replacement in charge: $ep2 — files were never at risk"
+  say "bringing $svc back and confirming it catches up on its own"
   docker compose start "$svc"; sleep 8
-  ./tests/replication.sh && ok "failover complete, data converged"
+  ./tests/replication.sh && ok "recovery complete: all 3 copies match again"
 }
 
 cmd_logs() { need docker; docker compose logs -f "${1:-}"; }
@@ -110,24 +126,31 @@ cmd_logs() { need docker; docker compose logs -f "${1:-}"; }
 cmd_down() {
   need docker
   if [ "${1:-}" = "-v" ]; then
-    say "stopping + wiping volumes"; docker compose down -v
+    say "shutting down AND deleting all stored files"; docker compose down -v
   else
-    say "stopping (volumes kept)"; docker compose down
+    say "shutting down (your files in vol0-2 are kept)"; docker compose down
   fi
-  ok "stopped"
+  ok "all stopped"
 }
 
 cmd_menu() {
   while true; do
-    printf "\n${BOLD}vdrctl menu${RST}  ${DIM}(cluster: "
-    leader >/dev/null 2>&1 && printf "${GRN}UP${RST}${DIM}" || printf "${RED}DOWN${RST}${DIM}"
+    printf "\n${BOLD}What would you like to do?${RST}  ${DIM}(cluster: "
+    leader >/dev/null 2>&1 && printf "${GRN}RUNNING${RST}${DIM}" || printf "${RED}STOPPED${RST}${DIM}"
     printf ")${RST}\n"
-    printf " 1) up  2) status  3) test all  4) test unit  5) failover  6) bench  7) logs  8) down  9) down -v  0) quit\n"
+    printf " 1) Start the 3 storage nodes\n"
+    printf " 2) Health page (who runs, who leads, copies match?)\n"
+    printf " 3) Prove everything works (all checks)\n"
+    printf " 4) Quick self-checks only (build + unit)\n"
+    printf " 5) Pull the plug on the leader (failover demo)\n"
+    printf " 6) Measure speed\n"
+    printf " 7) Watch the logs\n"
+    printf " 8) Shut down (keep files)   9) Shut down + delete files   0) Quit\n"
     printf "choice: "; read -r c
     case "$c" in
       1) cmd_up;; 2) cmd_status;; 3) cmd_test all;; 4) cmd_test unit;;
       5) cmd_failover;; 6) cmd_bench;; 7) cmd_logs;; 8) cmd_down;; 9) cmd_down -v;;
-      0) exit 0;; *) warn "pick 0-9";;
+      0) printf "bye!\n"; exit 0;; *) warn "please pick a number 0-9";;
     esac
   done
 }
@@ -136,5 +159,5 @@ case "${1:-help}" in
   up) shift; cmd_up "$@";; status) cmd_status;; test) shift; cmd_test "${1:-all}";;
   bench) cmd_bench;; failover) cmd_failover;; logs) shift; cmd_logs "${1:-}";;
   down) shift; cmd_down "${1:-}";; menu) cmd_menu;;
-  help|--help|-h) cmd_help;; *) die "unknown command '$1' — try: ./vdrctl help";;
+  help|--help|-h) cmd_help;; *) die "I don't know '$1' — try: ./vdrctl help";;
 esac

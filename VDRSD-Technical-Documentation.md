@@ -645,7 +645,7 @@ curl localhost:15052/metrics
 
 ```bash
 ./tests/nbd_quorum.sh
-# leader raft: vdrd-0:50051 -> NBD localhost:10809
+# leader raft: node-0:50051 -> NBD localhost:10809
 # nbd quorum write/read: OK
 # quorum replicas identical: OK (e46a1b26…)
 ```
@@ -653,7 +653,7 @@ curl localhost:15052/metrics
 ### 10.5 Node failure
 
 ```bash
-docker compose kill vdrd-0
+docker compose kill node-0
 curl localhost:15053/leader               # a new vdrd-N:50051 within seconds
 ./tests/nbd_quorum.sh                     # still passes via the new leader
 ```
@@ -661,7 +661,7 @@ curl localhost:15053/leader               # a new vdrd-N:50051 within seconds
 ### 10.6 Recovery and synchronisation
 
 ```bash
-docker compose start vdrd-0; sleep 8
+docker compose start node-0; sleep 8
 ./tests/replication.sh                    # reconverged, sha equal
 ```
 
@@ -717,7 +717,12 @@ Honestly: no `fio` numbers are published in this version — the bench harness
 exists (`tests/fio_bench.sh`, `BENCH.md`) but the kernel-NBD environment it
 needs was unavailable when this was written. Expected ballpark for 3-node
 local SSD is 4K sync-write p50 5–15 ms at 500–1500 IOPS, dominated by the
-double fsync per write. Fill in `BENCH.md` before quoting anything.
+double fsync per write. Fill in `BENCH.md` before quoting anything.   
+ 
+
+OUTPUT
+
+
 
 ## 12. Limitations and Future Work
 
