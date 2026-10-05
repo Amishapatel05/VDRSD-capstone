@@ -50,8 +50,8 @@ cmd_up() {
   mkdir -p vol0 vol1 vol2
   if command -v chcon >/dev/null; then chcon -Rt svirt_sandbox_file_t vol0 vol1 vol2 2>/dev/null || true; fi
   docker compose up -d --build || die "could not start — see the error above"
-  say "giving the nodes ~20 seconds to meet and pick a leader"
-  sleep 20
+  say "giving the nodes ~45 seconds to meet and pick a leader (staggered starts)"
+  sleep 45
   ep=$(leader) || { docker compose logs --tail=20; die "no leader was picked — clues above"; }
   ok "the cluster is up; $(leader_node "$ep") is in charge ($ep)"
   cmd_status
@@ -126,7 +126,14 @@ cmd_logs() { need docker; docker compose logs -f "${1:-}"; }
 cmd_down() {
   need docker
   if [ "${1:-}" = "-v" ]; then
-    say "shutting down AND deleting all stored files"; docker compose down -v
+    say "shutting down AND deleting all stored files"
+    say "(bind mounts survive 'compose down -v', so vols are removed directly)"
+    docker compose down -v
+    if ! rm -rf vol0 vol1 vol2 2>/dev/null; then
+      warn "container-written files are root-owned; retrying with sudo"
+      sudo rm -rf vol0 vol1 vol2 || die "could not clear vols — stale cluster state may persist"
+    fi
+    mkdir -p vol0 vol1 vol2
   else
     say "shutting down (your files in vol0-2 are kept)"; docker compose down
   fi

@@ -149,7 +149,14 @@ class VdrStateMgr : public nuraft::state_mgr {
 
   nuraft::ptr<nuraft::log_store> load_log_store() override { return store_; }
   int32_t server_id() override { return id_; }
-  void system_exit(const int exit_code) override { ::_exit(exit_code); }
+  // nuRaft calls this when IT believes the node is unrecoverable (e.g. -22
+  // isolation). Never silent: code + meaning go to stderr before dying, so a
+  // container exit always names its killer. (Negative codes surface as 256+n.)
+  void system_exit(const int exit_code) override {
+    std::fprintf(stderr, "[vdrd] FATAL: nuRaft system_exit(%d)\n", exit_code);
+    std::fflush(stderr);
+    ::_exit(exit_code);
+  }
 
  private:
   static nuraft::ptr<nuraft::buffer> ToBuffer(const std::string& raw) {

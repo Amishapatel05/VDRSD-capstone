@@ -67,7 +67,11 @@ docker compose up -d --build     # 3 nodes, RAFT=ON, --selftest 20 each boot
 docker compose down -v
 ```
 
-Volumes `./vol0,./vol1,./vol2` bind to `/data`. Delete to reset cluster. Note:
+Volumes `./vol0,./vol1,./vol2` bind to `/data`. They are bind mounts, so
+`docker compose down -v` does NOT clear them — use `./vdrctl down -v`
+(which removes them, via sudo if root-owned) for a true reset. Stale state
+bites: saved `cluster.conf` overrides `--peers`, so renames/code changes with
+old vols produce phantom peers and init failures. When in doubt, wipe. Note:
 `--selftest` re-runs on every (re)start with deterministic patterns, so restarts
 add more `SELFTEST OK` lines — scripts assert `>=1`, and sha must stay equal.
 

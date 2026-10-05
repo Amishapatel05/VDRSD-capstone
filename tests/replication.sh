@@ -3,7 +3,7 @@
 set -eu
 cd "$(dirname "$0")/.."
 docker compose up -d --build
-sleep 12
+sleep 45  # election + selftest, tolerant of staggered container starts
 OK=$(docker compose logs --no-log-prefix 2>/dev/null | grep -c "SELFTEST OK" || true)
 if [ "$OK" -lt 1 ]; then
   echo "FAIL: expected >=1 SELFTEST OK, got $OK (>=1: restarts re-run it, patterns are deterministic)"

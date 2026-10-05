@@ -12,6 +12,7 @@ services:
         RAFT: "ON"
     container_name: node-0
     hostname: node-0
+    restart: unless-stopped
     ports:
       - "10809:10809"
       - "50051:50051"
@@ -28,6 +29,7 @@ services:
         RAFT: "ON"
     container_name: node-1
     hostname: node-1
+    restart: unless-stopped
     ports:
       - "10810:10809"
       - "50052:50051"
@@ -44,6 +46,7 @@ services:
         RAFT: "ON"
     container_name: node-2
     hostname: node-2
+    restart: unless-stopped
     ports:
       - "10811:10809"
       - "50053:50051"

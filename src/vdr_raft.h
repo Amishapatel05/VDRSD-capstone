@@ -3,6 +3,8 @@
 // so 3 nodes elect with no manual add_srv step.
 #include <chrono>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <iostream>
 #include <string>
@@ -17,6 +19,33 @@
 #include "vdr_raft_sm.h"
 
 namespace vdr {
+
+// nuRaft diagnostics go to stderr (we used to pass nullptr: blind). Level via
+// VDR_LOG_LEVEL (6 trace … 1 fatal), default 4 (info).
+class StderrLogger : public nuraft::logger {
+ public:
+  StderrLogger() {
+    if (const char* e = std::getenv("VDR_LOG_LEVEL")) level_ = std::atoi(e);
+  }
+  void debug(const std::string& s) override { Out(5, "DBUG", s); }
+  void info(const std::string& s) override { Out(4, "INFO", s); }
+  void warn(const std::string& s) override { Out(3, "WARN", s); }
+  void err(const std::string& s) override { Out(2, "ERR", s); }
+  void set_level(int l) override { level_ = l; }
+  int get_level() override { return level_; }
+  void put_details(int level, const char* file, const char* func, size_t line,
+                   const std::string& s) override {
+    if (level > level_) return;
+    std::fprintf(stderr, "[raft %d %s:%s:%zu] %s\n", level, file, func, line, s.c_str());
+  }
+
+ private:
+  void Out(int level, const char* tag, const std::string& s) {
+    if (level > level_) return;
+    std::fprintf(stderr, "[raft %s] %s\n", tag, s.c_str());
+  }
+  int level_ = 4;
+};
 
 class VdrRaft {
  public:
@@ -33,12 +62,16 @@ class VdrRaft {
     params.election_timeout_upper_bound_ = 300;
     params.heart_beat_interval_ = 50;
     params.snapshot_distance_ = 100000;  // snapshots off (chk false); logs grow instead.
-    server_ = launcher_.init(sm_, mgr_, nuraft::ptr<nuraft::logger>(), Port(), asio_opt, params);
+    server_ = launcher_.init(sm_, mgr_, logger_, Port(), asio_opt, params);
     if (!server_) {
       if (err) *err = "raft init returned null";
       return false;
     }
-    for (int i = 0; i < 100 && !server_->is_initialized(); ++i)
+    // 30s window: compose/K3s start members with stagger, and init needs
+    // peers reachable. Fast path still exits in ms via the poll below.
+    // ponytail: no retry-in-process; a persistent miss exits(1) and the
+    // container runtime restarts us (compose `restart:`, K8s Always).
+    for (int i = 0; i < 600 && !server_->is_initialized(); ++i)
       std::this_thread::sleep_for(std::chrono::milliseconds(50));
     if (!server_->is_initialized()) {
       if (err) *err = "raft init timeout";
@@ -100,6 +133,7 @@ class VdrRaft {
   int id_;
   std::vector<std::pair<int, std::string>> peers_;
   std::string dir_;
+  nuraft::ptr<StderrLogger> logger_ = nuraft::cs_new<StderrLogger>();
   nuraft::ptr<VdrStateMachine> sm_;
   nuraft::ptr<VdrLogStore> ls_;
   nuraft::ptr<VdrStateMgr> mgr_;
@@ -111,7 +145,7 @@ class VdrRaft {
 // Non-leaders skip (exit via return false with skipped=true). Serves after.
 inline bool SelfTest(VdrRaft& raft, BlockStore* store, int n, bool* skipped) {
   *skipped = false;
-  for (int i = 0; i < 200 && !raft.IsLeader(); ++i) {
+  for (int i = 0; i < 600 && !raft.IsLeader(); ++i) {  // 60s: election follows slow init.
     if (raft.Leader() > 0) {  // someone else leads; my write path is P4's connector job.
       std::cout << "[selftest] skipped, leader=" << raft.Leader() << std::endl;
       *skipped = true;
